@@ -1,11 +1,11 @@
-package com.peppa.dome_05;
+package com.peppa.demo_05;
 
 /**
  * @Author: peppa
  * @Description: Synchronized 的锁优化
  * @Date: Created in 22:33 2024/10/14
  */
-public class SynchronizedOptimizeDome {
+public class SynchronizedOptimizeDemo {
     /*
     由于在 JDK1.5 当中 Doug Lee 推出了 ReentrantLock ,lock 锁的性能远远高于了当时版本的 synchronized 锁,因此 JDK 团队在 JDK1.6 的时候对 synchronized 做了大量的优化
     优化: 锁消除、锁膨胀、锁升级 [ 无锁=> 匿名偏向=> 偏向锁=> 轻量级锁=> 重量级锁]

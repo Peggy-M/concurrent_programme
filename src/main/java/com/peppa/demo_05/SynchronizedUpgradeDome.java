@@ -1,4 +1,4 @@
-package com.peppa.dome_05;
+package com.peppa.demo_05;
 
 import org.openjdk.jol.info.ClassLayout;
 

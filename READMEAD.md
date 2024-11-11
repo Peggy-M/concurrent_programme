@@ -294,3 +294,76 @@ Lock Record 以及 ObjectMonitor 存储的内容
 
 ![image-20241014235309834](https://peggy-note.oss-cn-hangzhou.aliyuncs.com/english/image-20241014235309834.png)
 
+ #### hotSpot 的核心属性源码
+
+![image-20241111225425906](https://peggy-note.oss-cn-hangzhou.aliyuncs.com/english/image-20241111225425906.png)
+
+![image-20241111230556744](https://peggy-note.oss-cn-hangzhou.aliyuncs.com/english/image-20241111230556744.png)
+
+![image-20241111231653513](https://peggy-note.oss-cn-hangzhou.aliyuncs.com/english/image-20241111231653513.png)
+
+~~~ cpp
+void ATTR ObjectMonitor::enter(TRAPS) {
+  Thread * const Self = THREAD ; //获取到当前线程
+  void * cur ;
+
+  cur = Atomic::cmpxchg_ptr (Self, &_owner, NULL) ; // CAS 竞争获取锁
+  if (cur == NULL) { //获取锁成功
+     return ;
+  }
+
+  if (cur == Self) { //所有获取的锁等于当前线程,锁重入操作
+     // TODO-FIXME: check for integer overflow!  BUGID 6557169.
+     _recursions ++ ; //锁重入次数 +1
+     return ;
+  }
+
+  if (Self->is_lock_owned ((address)cur)) { //轻量级升级重量级锁
+    assert (_recursions == 0, "internal state error");
+    _recursions = 1 ; //锁重入设置 1
+    _owner = Self ; //持有锁为当前线程
+    OwnerIsThread = 1 ; //设置是否为当前线程的标志位
+    return ;
+  }
+  Atomic::inc_ptr(&_count);//没有获取到锁,此时竞争锁的线程个数+1
+
+  EventJavaMonitorEnter event;
+
+  {
+    OSThreadContendState osts(Self->osthread());
+    ThreadBlockInVM tbivm(jt);
+
+    Self->set_current_pending_monitor(this);
+
+    // TODO-FIXME: change the following for(;;) loop to straight-line code.
+    for (;;) {
+      jt->set_suspend_equivalent();
+      EnterI (THREAD) ; //将当前竞争的线程添加到队列当中添加到 _cxq 队列当中
+      if (!ExitSuspendEquivalent(jt)) break ;
+          _recursions = 0 ;
+      _succ = NULL ;
+      exit (false, Self) ;
+
+      jt->java_suspend_self();
+    }
+    Self->set_current_pending_monitor(NULL);
+  }
+
+}
+
+~~~
+
+### 深入 ReentrantLock
+
+`ReentantLock` 与 `synchronized` 的底层都是基于 JVM 层面实现的,两者的实现原理存在差异，ReentrantLock 本身是基于 AQS 实现,而 synchronized 的底层是调用了 C++
+
+的 ObjectMonitor 方法, synchronized 的锁升级过程是不可逆向的，这就表示一旦升级成重量级锁就不会降级，这样往往会消耗硬件的资源，所以在锁竞争比较激烈的情况下推荐使用 ReentantLock 是处理。由于 ReentantLock 在 java 层面封装了一些功能性的方法，因此其功能也更加的丰富。
+
+#### AQS 介绍
+
+既然 ReentrantLock 是基于 AQS 实现的, 那首先必定需要先知道什么是 AQS ，以及 AQS 有什么具体的作用。AQS 是抽象基类 `AbstractQueuedSynchronizer` 的简写，是并发大师 Doug Lea 编写，比如 `ReentantLock` 、`ThreadPoolExecutor` 、`Semaphore`都实现了 AQS .
+
+![image-20241112001937347](https://peggy-note.oss-cn-hangzhou.aliyuncs.com/english/image-20241112001937347.png)
+
+#### 源码解析
+
