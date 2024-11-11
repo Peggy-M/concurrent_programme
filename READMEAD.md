@@ -367,3 +367,7 @@ void ATTR ObjectMonitor::enter(TRAPS) {
 
 #### 源码解析
 
+##### lock 方法
+
+##### tryLock 方法
+
