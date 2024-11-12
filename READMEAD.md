@@ -369,5 +369,232 @@ void ATTR ObjectMonitor::enter(TRAPS) {
 
 ##### lock 方法
 
-##### tryLock 方法
+~~~ java
+final void lock() {
+    acquire(1);
+}
+~~~
+
+
+
+~~~ java
+//非公平锁
+final void lock() {
+    //一开始就进行 CAS 比较将当前的 状态设置为 1 ,其实这里的最终会调用cpp 层面的 native 方法 compareAndSwapInt 
+    if (compareAndSetState(0, 1))
+        //如果上面的 CAS 获取锁成功,则会将当前的线程设置到 exclusiveOwnerThread 独占 wner 锁线程属性当中,表示当前线程独占用这把锁
+        setExclusiveOwnerThread(Thread.currentThread());
+    else
+        acquire(1);
+}
+
+~~~
+
+
+
+~~~ java
+//公平锁
+public final void acquire(int arg) {
+    //判断当前的线程是否可以获取到锁
+    if (!tryAcquire(arg) &&
+        //如果没有获取到锁,会将当前线程封装成一个 NODE 节点,插入到当前的锁线程队列当中开始排队
+        //addWaiter 方法的作用就是追加当前的队列尾部
+        //acquireQueued 方法检查当前线程是否是第一个排队的节点,如果是可以再次获取锁资源,如果长时间拿去不到则挂起线程
+        acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        //中断线程,表示当前线程处于空闲状态的时候中断当前的线程
+        selfInterrupt();
+}
+~~~
+
+
+
+##### tryAcquire 方法
+
+~~~ java
+protected boolean tryAcquire(int arg) {
+    throw new UnsupportedOperationException();
+}
+~~~
+
+~~~ java
+//非公平锁的 tryAcquire
+protected final boolean tryAcquire(int acquires) {
+    return nonfairTryAcquire(acquires);
+}
+//非公平锁的实现
+final boolean nonfairTryAcquire(int acquires) {
+    // 获取当前线程
+    final Thread current = Thread.currentThread();
+    //获取 state 属性
+    int c = getState();
+    if (c == 0) { //如果当前的持有锁的线程为1 [表示如果在这个阶段有持有锁的线程释放了锁]
+        if (compareAndSetState(0, acquires)) { //此时再次通过 CAS 抢占一波锁资源
+            setExclusiveOwnerThread(current); // 如果抢占成功则设置当前的线程独占该锁
+            return true;
+        }
+    }
+    else if (current == getExclusiveOwnerThread()) { //如果占用锁的线程恰好是当前线程,锁重入
+        int nextc = c + acquires; //设置当前的 sate +1 锁重入+1
+        if (nextc < 0) // overflow [如果锁重入的次数超出 int 的最大有符号整数范围]
+            throw new Error("Maximum lock count exceeded");
+        setState(nextc); //设置新的 state
+        return true;
+    }
+    return false;
+}
+~~~
+
+~~~ java
+//公平锁
+
+protected final boolean tryAcquire(int acquires) {
+    final Thread current = Thread.currentThread();
+    int c = getState();
+    if (c == 0) {
+        if (!hasQueuedPredecessors() && //查询当前是否存在排队的线程,如果存在并且当前线程是首个线程,执行 CAS 进行抢占锁
+            compareAndSetState(0, acquires)) {
+            setExclusiveOwnerThread(current);
+            return true;
+        }
+    }
+    else if (current == getExclusiveOwnerThread()) {
+        int nextc = c + acquires;
+        if (nextc < 0)
+            throw new Error("Maximum lock count exceeded");
+        setState(nextc);
+        return true;
+    }
+    return false;
+}
+~~~
+
+~~~ java
+public final boolean hasQueuedPredecessors() {
+    // The correctness of this depends on head being initialized
+    // before tail and on head.next being accurate if the current
+    // thread is first in queue.
+    Node t = tail; // Read fields in reverse initialization order
+    Node h = head;
+    Node s;
+    return h != t && //如果 head == tail 表示头尾相等
+        ((s = h.next) == null || s.thread != Thread.currentThread()); //如果下一个节点不 null,并且当前节点为当前线程
+}
+~~~
+
+##### addWaiter 方法
+
+~~~ java
+private Node addWaiter(Node mode) {
+    //将当前的线程构建成一个 Node 节点
+    Node node = new Node(Thread.currentThread(), mode);
+    // Try the fast path of enq; backup to full enq on failure
+    //获取指向尾巴节
+    Node pred = tail;
+    if (pred != null) { //如果尾节点不为 null
+        node.prev = pred; //将当前节点的上一个节点指向尾节点
+        if (compareAndSetTail(pred, node)) { //通过 CAS 的方式设置当前的节点为尾巴节点
+            pred.next = node; //如果成功,将之前的尾节点的 next 指向当前节点
+            return node;
+        }
+    }
+    enq(node); //如果之前的 CAS 失败或者说尾巴节为 NULL ,将当前线程一定可以放置到线程等待队列的末尾
+    return node;
+}
+~~~
+
+~~~ java
+private Node enq(final Node node) {
+        for (;;) {
+            Node t = tail;
+            if (t == null) { // Must initialize 
+                //如果当前的尾节点为,表示当前的队列一个节点都没有,NULL 则初始化一个伪节点
+                if (compareAndSetHead(new Node())) //通过 CAS 的方式将伪节点设置为头节点与尾节点
+                    tail = head;
+            } else {
+                node.prev = t; //当前线程的上一个节点为尾巴节点
+                if (compareAndSetTail(t, node)) { //通过 CAS 的方式设置尾节点
+                    t.next = node; //将之前尾节点的下一个节点设置为当前线程节点
+                    return t;
+                }
+            }
+        }
+    }
+~~~
+
+##### acquireQueued 方法
+
+~~~ java
+//当前线程的没有获取到锁资源,并且在当前的线程队列当中处于排队状态
+final boolean acquireQueued(final Node node, int arg) {
+    // 获取锁资源的标志位,默认是失败
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        for (;;) {
+            //获取到当前队列节点的上一个节点
+            final Node p = node.predecessor();
+            //如果是当前节点的上一个节点是 head 头节点 [排在第一],直接先尝试获取一次锁资源
+            if (p == head && tryAcquire(arg)) {
+                //如果获取到锁资源,将当前节点设置为 head 头节点,为了让 GC 回收
+                setHead(node);//
+                p.next = null; // help GC 将之前的头节点的下一个节点设置为 null被 GC 回收
+                failed = false; //当前的节点获取锁资源成功
+                return interrupted; 
+            }
+            //没获取到锁资源,或者当前的节点不是队列第一个节点
+            if (shouldParkAfterFailedAcquire(p, node) && //检查当前的 node 是否可以挂起
+                parkAndCheckInterrupt())
+                interrupted = true;
+        }
+    } finally {
+        if (failed)
+            cancelAcquire(node);
+    }
+}
+~~~
+
+
+
+~~~ JAVA
+//这里很妙的点在于,如果一旦当前节点获取到了锁资源,并且当前节点的上一个节点是 head 节点,则表示处于当前队列的第一个节点,并且当前节点已经获取到了锁资源,此时如果将 head 节点设置为当前的节点,那么之前的 head 节点就基于可达性分析的时候,发现没有子引用对象,就可以直接被下一次 GC 回收掉
+private void setHead(Node node) {
+    //设置当前的节点为 head 头伪节点
+    head = node;
+    node.thread = null; //将该伪节点的引用设置为 null
+    node.prev = null;
+}
+~~~
+
+
+
+~~~ java
+//挂起是需要确定上一个节点是否存在问题
+private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+    int ws = pred.waitStatus;
+    if (ws == Node.SIGNAL)
+        /*
+         * This node has already set status asking a release
+         * to signal it, so it can safely park.
+         */
+        return true;
+    if (ws > 0) {
+        /*
+         * Predecessor was cancelled. Skip over predecessors and
+         * indicate retry.
+         */
+        do {
+            node.prev = pred = pred.prev;
+        } while (pred.waitStatus > 0);
+        pred.next = node;
+    } else {
+        /*
+         * waitStatus must be 0 or PROPAGATE.  Indicate that we
+         * need a signal, but don't park yet.  Caller will need to
+         * retry to make sure it cannot acquire before parking.
+         */
+        compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+    }
+    return false;
+}
+~~~
 
